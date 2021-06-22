@@ -1,70 +1,74 @@
-const passport = require("passport");
-const LocalStrategy = require("passport-local").Strategy;
-const User = require("../models/user");
 
-passport.serializeUser((user, done) => {
-  done(null, user.id);
-});
+const passport = require('passport')
+const GoogleStrategy = require('passport-google-oauth2').Strategy;
 
-passport.deserializeUser((id, done) => {
-  User.findById(id, (err, user) => {
-    done(err, user);
-  });
-});
+const User = require('../models/user')
 
-passport.use(
-  "local.signup",
-  new LocalStrategy(
-    {
-      usernameField: "email",
-      passwordField: "password",
-      passReqToCallback: true,
-    },
-    async (req, email, password, done) => {
-      try {
-        const user = await User.findOne({ email: email });
-        if (user) {
-          return done(null, false, { message: "Email already exists" });
-        }
-        if (password != req.body.password2) {
-          return done(null, false, { message: "Passwords must match" });
-        }
-        const newUser = await new User();
-        newUser.email = email;
-        newUser.password = newUser.encryptPassword(password);
-        newUser.username = req.body.name;
-        await newUser.save();
-        return done(null, newUser);
-      } catch (error) {
-        console.log(error);
-        return done(error);
-      }
-    }
-  )
-);
+module.exports = function (app) {
+  app.use(require('cookie-parser')());
+  app.use(require('express-session')({
+    secret: 'secret',
+    resave: false,
+    saveUninitialized: false
+  }));
 
-passport.use(
-  "local.signin",
-  new LocalStrategy(
-    {
-      usernameField: "email",
-      passwordField: "password",
-      passReqToCallback: false,
-    },
-    async (email, password, done) => {
-      try {
-        const user = await User.findOne({ email: email });
-        if (!user) {
-          return done(null, false, { message: "User doesn't exist" });
-        }
-        if (!user.validPassword(password)) {
-          return done(null, false, { message: "Wrong password" });
-        }
-        return done(null, user);
-      } catch (error) {
-        console.log(error);
-        return done(error);
-      }
-    }
-  )
-);
+  app.use(passport.initialize())
+  app.use(passport.session())
+
+  // Passport Google Auth
+  passport.use(new GoogleStrategy({
+    clientID: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    callbackURL: 'http://localhost:3000/user/auth/google/callback',
+    passReqToCallback: true
+  },
+    function (request, accessToken, refreshToken, profile, done) {
+      const jsonData = profile._json;
+      // Check If user Exist
+      User.findOne({ googleId: jsonData.sub, email: jsonData.email })
+        .then(function (user) {
+          if (user) {
+            // If exist return
+            return done(null, user)
+          } else {
+            // Else create new user with valid details
+            let newUser = {
+              provider: 'google',
+              googleId: jsonData.sub,
+              name: `${jsonData.given_name} ${jsonData.family_name}`,
+              email: jsonData.email,
+              image: jsonData.picture ? jsonData.picture : ''
+            };
+            const user = new User(newUser);
+            user.save((err, result) => {
+              if (err) {
+                Logger.error(err);
+                return done(null, false, {
+                  message: 'Error occurred'
+                });
+              } else {
+                return done(null, result);
+              }
+            });
+          }
+        })
+        .catch(error => {
+          Logger.error(error);
+          return done(null, error);
+        })
+    }));
+
+  passport.serializeUser(function (user, done) {
+    done(null, user);
+  })
+
+  passport.deserializeUser(function (id, done) {
+    User.findById(id)
+      .then(function (user) {
+        done(null, user)
+      })
+      .catch(done)
+  })
+
+  return passport
+}

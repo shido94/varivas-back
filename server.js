@@ -2,98 +2,41 @@ require('dotenv').config();
 const createError = require('http-errors');
 const express = require('express');
 const path = require('path');
-const cookieParser = require('cookie-parser');
 const logger = require('morgan');
 const mongoose = require('mongoose');
-const passport = require('passport');
-const flash = require('connect-flash');
-const Category = require('./models/category');
-// const Address = require('./models/address');
+const passport = require('./config/passport');
 const connectDB = require('./config/db');
 const cors = require('cors')
-const moment = require('moment');
 const wlogger = require('./config/winston');
+const bodyParser = require('body-parser');
 
 const app = express();
-require('./config/passport');
+
+global.Logger = wlogger;
+global.domain = require("./common/domainInclude");
 
 // mongodb configuration
 connectDB();
 
-// app.set('view engine', 'ejs');
-
 // Set Static Folder
 app.use(express.static(path.join(__dirname, 'ui')));
-app.use('/static', express.static(path.join(__dirname, 'static')));
+// app.use('/static', express.static(path.join(__dirname, 'static')));
 app.use(cors());
 app.enable('trust proxy');
-// admin route
-// const adminRouter = require('./routes/admin');
-// app.use('/admin', adminRouter);
-
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({
+    extended: false
+}));
 app.use(logger('dev'));
 app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
-app.use(cookieParser());
-app.use(express.static(path.join(__dirname, 'public')));
 
-app.use(flash());
-app.use(passport.initialize());
-app.use(passport.session());
-
-// global variables across routes
-app.use(async (req, res, next) => {
-  try {
-    res.locals.login = req.isAuthenticated();
-    res.locals.currentUser = req.user;
-    res.locals.moment = moment;
-
-    res.locals.address = null;
-
-    // if (req.isAuthenticated()) {
-    //   const address = await Address.findOne({is_default: true, user: req.user});
-    //   res.locals.address = address;
-    // }
-
-    const categories = await Category.find({}).sort({ title: 1 }).exec();
-    res.locals.categories = categories;
-    next();
-  } catch (error) {
-    wlogger.error(error);
-    res.redirect('/');
-  }
-});
-
-// add breadcrumbs
-get_breadcrumbs = function (url) {
-  var rtn = [{ name: 'Home', url: '/' }],
-    acc = '', // accumulative url
-    arr = url.substring(1).split('/');
-
-  for (i = 0; i < arr.length; i++) {
-    acc = i != arr.length - 1 ? acc + '/' + arr[i] : null;
-    rtn[i + 1] = {
-      name: arr[i].charAt(0).toUpperCase() + arr[i].slice(1),
-      url: acc,
-    };
-  }
-  return rtn;
-};
-
-app.use(function (req, res, next) {
-  req.breadcrumbs = get_breadcrumbs(req.originalUrl);
-  next();
-});
+passport(app);
 
 //routes config
-const indexRouter = require('./routes/index');
-const productsRouter = require('./routes/products');
 const usersRouter = require('./routes/user');
-const pagesRouter = require('./routes/pages');
-app.use('/product', productsRouter);
+const postRouter = require('./routes/post');
 app.use('/user', usersRouter);
-app.use('/pages', pagesRouter);
-app.use('/', indexRouter);
+app.use('/post', postRouter);
 
 app.use('*', function(req, res) {
   res.sendFile(path.join(__dirname, '/ui/index.html'));
@@ -114,18 +57,20 @@ app.use(function (req, res, next) {
 // error handler
 app.use(function (err, req, res, next) {
   // set locals, only providing error in development
-  res.locals.message = err.message;
-  res.locals.error = req.app.get('env') === 'development' ? err : {};
 
   // render the error page
+  Logger.error(err);
   res.status(err.status || 500);
-  res.render('error');
+  res.status(400).json({
+    success: false,
+    error: 'Some error occurred'
+  });
 });
 
 var port = process.env.PORT || 3000;
 app.set('port', port);
 app.listen(port, () => {
-  wlogger.debug('Server running at port ' + port);
+  Logger.debug('Server running at port ' + port);
 });
 
 module.exports = app;

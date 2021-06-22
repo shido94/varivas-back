@@ -1,142 +1,151 @@
 const express = require("express");
 const router = express.Router();
-// const csrf = require("csurf");
-var passport = require("passport");
-var LocalStrategy = require("passport-local").Strategy;
-const Product = require("../models/product");
-const Order = require("../models/order");
-const Cart = require("../models/cart");
-const middleware = require("../middleware");
-const {
-  userSignUpValidationRules,
-  userSignInValidationRules,
-  validateSignup,
-  validateSignin,
-} = require("../config/validator");
-// const csrfProtection = csrf();
-// router.use(csrfProtection);
+const passport = require("passport");
+const function_c = require('../helpers/functions_commons');
+const jwt = require('../helpers/auth1');
+const ObjectId = require('mongoose').Types.ObjectId;
 
-// GET: display the signup form with csrf token
-router.get("/signup", middleware.isNotLoggedIn, (req, res) => {
-  var errorMsg = req.flash("error")[0];
-  res.render("user/signup", {
-    // csrfToken: req.csrfToken(),
-    errorMsg,
-    pageName: "Sign Up",
-  });
-});
-// POST: handle the signup logic
-router.post(
-  "/signup",
-  [
-    middleware.isNotLoggedIn,
-    userSignUpValidationRules(),
-    validateSignup,
-    passport.authenticate("local.signup", {
-      successRedirect: "/user/profile",
-      failureRedirect: "/user/signup",
-      failureFlash: true,
-    }),
-  ],
-  async (req, res) => {
-    try {
-      //if there is cart session, save it to the user's cart in db
-      if (req.session.cart) {
-        const cart = await new Cart(req.session.cart);
-        cart.user = req.user._id;
-        await cart.save();
-      }
-      // redirect to the previous URL
-      if (req.session.oldUrl) {
-        var oldUrl = req.session.oldUrl;
-        req.session.oldUrl = null;
-        res.redirect(oldUrl);
-      } else {
-        res.redirect("/user/profile");
-      }
-    } catch (err) {
-      console.log(err);
-      req.flash("error", err.message);
-      return res.redirect("/");
-    }
-  }
-);
+// Handle the facebook sign-in
+router.get('/auth/google', passport.authenticate('google', { scope: [ 'email', 'profile' ] }));
 
-// GET: display the signin form with csrf token
-router.get("/signin", middleware.isNotLoggedIn, async (req, res) => {
-  var errorMsg = req.flash("error")[0];
-  res.render("user/signin", {
-    // csrfToken: req.csrfToken(),
-    errorMsg,
-    pageName: "Sign In",
-  });
+router.get( '/auth/google/callback',passport.authenticate( 'google', {
+        successRedirect: '/user/login/success',
+        failureRedirect: '/user/login/error'
+}));
+
+router.get('/login/error', function (req, res) {
+  Logger.error('Error on social login');
+  return function_c.queryError(res);
 });
 
-// POST: handle the signin logic
-router.post(
-  "/signin",
-  [
-    middleware.isNotLoggedIn,
-    userSignInValidationRules(),
-    validateSignin,
-    passport.authenticate("local.signin", {
-      failureRedirect: "/user/signin",
-      failureFlash: true,
-    }),
-  ],
-  async (req, res) => {
-    try {
-      // cart logic when the user logs in
-      let cart = await Cart.findOne({ user: req.user._id });
-      // if there is a cart session and user has no cart, save it to the user's cart in db
-      if (req.session.cart && !cart) {
-        const cart = await new Cart(req.session.cart);
-        cart.user = req.user._id;
-        await cart.save();
-      }
-      // if user has a cart in db, load it to session
-      if (cart) {
-        req.session.cart = cart;
-      }
-      // redirect to old URL before signing in
-      if (req.session.oldUrl) {
-        var oldUrl = req.session.oldUrl;
-        req.session.oldUrl = null;
-        res.redirect(oldUrl);
-      } else {
-        res.redirect("/user/profile");
-      }
-    } catch (err) {
-      console.log(err);
-      req.flash("error", err.message);
-      return res.redirect("/");
-    }
+router.get('/login/success', function (req, res) {
+  // Generate token from userId
+  const token = jwt.createToken(req.user._id);
+  return res.redirect(`${process.env.UI_URL}/user/${token}`);
+});
+
+router.post('/token/validate', jwt.validateToken, async function (req, res) {
+  const user = await domain.User.findById(req.user.id, 'email name image');
+  const output = {
+    token: req.body.token,
+    user: user
   }
-);
+
+  return function_c.actionSuccess(res, output);
+});
 
 // GET: display user's profile
-router.get("/profile", middleware.isLoggedIn, async (req, res) => {
-  const successMsg = req.flash("success")[0];
-  const errorMsg = req.flash("error")[0];
+router.get("/profile", jwt.checkAuth, async (req, res) => {
   try {
-    // find all orders of this user
-    allOrders = await Order.find({ user: req.user });
-    res.render("user/profile", {
-      orders: allOrders,
-      errorMsg,
-      successMsg,
-      pageName: "User Profile",
-    });
-  } catch (err) {
-    console.log(err);
-    return res.redirect("/");
+
+    const user = await domain.User.findById(req.user.id);
+    return function_c.actionSuccess(res, user);
+
+  } catch (error) {
+    Logger.error('Error on get profiles: ', error);
+    return function_c.queryError(res, error);
   }
 });
 
-// GET: logout
-router.get("/logout", middleware.isLoggedIn, (req, res) => {
-  req.logout();
-  req.session.cart = null;
-  res.redirect("/");
+// POST: Follow user
+router.post("/follow/:id", jwt.checkAuth, async (req, res) => {
+  try {
+    const followUserId = req.params.id;
+
+    const status = await domain.Follower.findOne({userId: req.user.id, followUserId: req.params.id})
+
+    let follows = {}
+    // If found, Unfollow the user
+    if (status) {
+      await domain.Follower.findOneAndRemove({
+        userId: req.user.id, followUserId: req.params.id
+      });
+    } else {
+      // Otherwise add new User
+      const followUser = domain.Follower();
+      followUser.userId = req.user.id;
+      followUser.followUserId = ObjectId(followUserId);
+      await followUser.save();
+      follows = followUser;
+    }
+    return function_c.actionSuccess(res, follows);
+
+  } catch (error) {
+    Logger.error('Error on social login ');
+    return function_c.queryError(res, error);
+  }
 });
+
+router.get('/follows/:id', async (req, res) => {
+  try {
+
+    const follows = await domain.Follower.findOne({followUserId: ObjectId(req.params.id)});
+    return function_c.actionSuccess(res, follows);
+
+  } catch (error) {
+    Logger.error('Error on get follows details');
+    return function_c.queryError(res, error);
+  }
+})
+
+// GET: Followers user
+router.get("/followers", jwt.checkAuth, async (req, res) => {
+  try {
+
+    const followers = await domain.Follower.aggregate([
+      {
+        $match: {
+          followUserId: ObjectId(req.user.id)
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'userId',
+          foreignField: '_id',
+          as: 'user'
+        }
+      },
+      {
+        $unwind: '$user'
+      }
+    ])
+    return function_c.actionSuccess(res, followers);
+
+  } catch (error) {
+    Logger.error('Error on social login ');
+    return function_c.queryError(res, error);
+  }
+});
+
+// GET: User follows List
+router.get("/follows", jwt.checkAuth, async (req, res) => {
+  try {
+
+    const followers = await domain.Follower.aggregate([
+      {
+        $match: {
+          userId: ObjectId(req.user.id)
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'followUserId',
+          foreignField: '_id',
+          as: 'follows'
+        }
+      },
+      {
+        $unwind: '$follows'
+      }
+    ])
+    return function_c.actionSuccess(res, followers);
+
+  } catch (error) {
+    Logger.error('Error on follows list: ', error);
+    return function_c.queryError(res, error);
+  }
+});
+
 module.exports = router;
